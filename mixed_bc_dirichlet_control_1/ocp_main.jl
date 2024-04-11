@@ -3,35 +3,6 @@ using Ferrite, FerriteGmsh, FerriteViz, SparseArrays, WGLMakie
 grid = togrid("newmesh.msh")
 
 dim = 2
-ip = Lagrange{dim, RefTetrahedron, 1}()
-qr = QuadratureRule{dim, RefTetrahedron}(2)
-qr_face = QuadratureRule{dim-1, RefTetrahedron}(2)
-cellvalues = CellScalarValues(qr, ip);
-facevalues = FaceScalarValues(qr_face,ip);
-
-dh = DofHandler(grid)
-add!(dh, :u, 1)
-close!(dh);
-
-K = create_sparsity_pattern(dh);
-M = create_sparsity_pattern(dh);
-∂M = create_sparsity_pattern(dh);
-
-ch = ConstraintHandler(dh);
-
-Γ = getfaceset(dh.grid, "Boundary");
-ΓH = getfaceset(dh.grid, "Homogeneous");
-ΓC = setdiff(getfaceset(dh.grid, "Control"), ΓH);
-ΓD = union(ΓH, ΓC);
-dbc = Dirichlet(:u, ΓH , (x, t) -> 0);
-add!(ch, dbc);
-close!(ch);
-
-controlh = ConstraintHandler(dh);
-controlbc = Dirichlet(:u, ΓD, (x,t) -> 0);
-add!(controlh, controlbc);
-close!(controlh);
-
 
 function doassemble_K!(K::SparseMatrixCSC, cellvalues::CellScalarValues{dim}, dh::DofHandler) where {dim}
 
@@ -124,34 +95,68 @@ function doassemble_∂M!(∂M::SparseMatrixCSC, cellvalues::CellScalarValues{di
 end
 
 
-doassemble_K!(K, cellvalues, dh);
-doassemble_M!(M, cellvalues, dh);
-doassemble_∂M!(∂M, cellvalues, facevalues, dh);
+function solve_ocp(grid::Grid)
 
+    ip = Lagrange{dim, RefTetrahedron, 1}()
+    qr = QuadratureRule{dim, RefTetrahedron}(2)
+    qr_face = QuadratureRule{dim-1, RefTetrahedron}(2)
+    cellvalues = CellScalarValues(qr, ip);
+    facevalues = FaceScalarValues(qr_face,ip);
 
-hom_idx = ch.prescribed_dofs;
-❌hom_idx = setdiff(1:ndofs(dh), hom_idx);
-dir_idx = controlh.prescribed_dofs;
-❌dir_idx = setdiff(1:ndofs(dh), dir_idx);
+    dh = DofHandler(grid)
+    add!(dh, :u, 1)
+    close!(dh);
 
+    K = create_sparsity_pattern(dh);
+    M = create_sparsity_pattern(dh);
+    ∂M = create_sparsity_pattern(dh);
 
-f_data = ones(ndofs(dh));
+    ΓH = getfaceset(dh.grid, "Homogeneous");
+    ΓC = setdiff(getfaceset(dh.grid, "Control"), ΓH);
+    ΓD = union(ΓH, ΓC);
+    
+    dch = ConstraintHandler(dh);
+    dbc = Dirichlet(:u, ΓH , (x, t) -> 0);
+    add!(dch, dbc);
+    close!(dch);
 
-fun_aux(a,b,c,d) = sparse_vcat(sparse_hcat(a, b), sparse_hcat(c,d));
-lhs_matrix = fun_aux(K[❌dir_idx,❌hom_idx], zeros(❌dir_idx |> length,❌dir_idx |> length), 
-(M+∂M)[❌hom_idx,❌hom_idx], K[❌hom_idx, ❌dir_idx]);
+    cch = ConstraintHandler(dh);
+    cbc = Dirichlet(:u, ΓD, (x,t) -> 0);
+    add!(cch, cbc);
+    close!(cch);
 
-rhs = vcat( (M*f_data)[❌dir_idx], zeros( ❌hom_idx |> length) );
+    doassemble_K!(K, cellvalues, dh);
+    doassemble_M!(M, cellvalues, dh);
+    doassemble_∂M!(∂M, cellvalues, facevalues, dh);
+    
+    
+    hom_idx = ch.prescribed_dofs;
+    ❌hom_idx = setdiff(1:ndofs(dh), hom_idx);
+    dir_idx = controlh.prescribed_dofs;
+    ❌dir_idx = setdiff(1:ndofs(dh), dir_idx);
+    
+    
+    f_data = ones(ndofs(dh));
+    
+    fun_aux(a,b,c,d) = sparse_vcat(sparse_hcat(a, b), sparse_hcat(c,d));
+    lhs_matrix = fun_aux(K[❌dir_idx,❌hom_idx], zeros(❌dir_idx |> length,❌dir_idx |> length), 
+    (M+∂M)[❌hom_idx,❌hom_idx], K[❌hom_idx, ❌dir_idx]);
+    
+    rhs = vcat( (M*f_data)[❌dir_idx], zeros( ❌hom_idx |> length) );
+    
+    sol = lhs_matrix \ rhs
+    
+    y = zeros(ndofs(dh));
+    y[❌hom_idx] = sol[1:length(❌hom_idx) ];
+    
+    z = zeros(ndofs(dh));
+    z[❌dir_idx] = sol[length(❌hom_idx)+1:length(sol)];
+    
+    u = y;
+    plotter = FerriteViz.MakiePlotter(dh, u)
+    
+    FerriteViz.solutionplot(plotter,field=:u)
+    
+end
 
-sol = lhs_matrix \ rhs
-
-y = zeros(ndofs(dh));
-y[❌hom_idx] = sol[1:length(❌hom_idx) ];
-
-z = zeros(ndofs(dh));
-z[❌dir_idx] = sol[length(❌hom_idx)+1:length(sol)];
-
-u = y;
-plotter = FerriteViz.MakiePlotter(dh, u)
-
-FerriteViz.solutionplot(plotter,field=:u)
+solve_ocp(grid)
