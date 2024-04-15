@@ -151,7 +151,7 @@ function solve_ocp(grid::Grid)
     z[❌dir_idx] = sol[length(❌hom_idx)+1:length(sol)];
     
     u = y;
-    return grid, u
+    return dh, grid, u
 end
 
 filenames = ["1em1.msh", "8em2.msh", "5em2.msh"]
@@ -159,17 +159,24 @@ filenames = ["1em1.msh", "8em2.msh", "5em2.msh"]
 
 fine_mesh_name = "2em2.msh";
 
-fine_grid = togrid("meshes/" * fine_mesh_name)
-fine_grid, fine_u = solve_ocp(fine_grid)
+grid_fine = togrid("meshes/" * fine_mesh_name)
+dh_fine, grid_fine, u_fine = solve_ocp(grid_fine)
+
+points = [node.x for node in grid_fine.nodes]
+
+grid_coarse = togrid("meshes/1em1.msh")
+dh_coarse, grid_coarse, u_coarse = solve_ocp(grid_coarse)
 
 
+points = [node.x for node in grid_fine.nodes]
 
 for filename in filenames
     joined_filename  = "meshes/" * filename
     grid = togrid(joined_filename)
     print("clrd")
-    solve_ocp(grid)
+    dh_coarse, grid_coarse, u_coarse = solve_ocp(grid)
+    #project u_coarse onto fine grid
+    ph = PointEvalHandler(grid_coarse, points);
+    Ferrite.get_point_values(ph, dh_coarse, u_coarse, :u)
+    #get_point_values(ph, dh_coarse, u_coarse, :u)
 end
-
-
-
