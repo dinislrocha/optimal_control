@@ -1,7 +1,5 @@
 using Ferrite, FerriteGmsh, FerriteViz, SparseArrays, WGLMakie
 
-grid = togrid("newmesh.msh")
-
 dim = 2
 
 function doassemble_K!(K::SparseMatrixCSC, cellvalues::CellScalarValues{dim}, dh::DofHandler) where {dim}
@@ -130,9 +128,9 @@ function solve_ocp(grid::Grid)
     doassemble_∂M!(∂M, cellvalues, facevalues, dh);
     
     
-    hom_idx = ch.prescribed_dofs;
+    hom_idx = dch.prescribed_dofs;
     ❌hom_idx = setdiff(1:ndofs(dh), hom_idx);
-    dir_idx = controlh.prescribed_dofs;
+    dir_idx = cch.prescribed_dofs;
     ❌dir_idx = setdiff(1:ndofs(dh), dir_idx);
     
     
@@ -153,10 +151,25 @@ function solve_ocp(grid::Grid)
     z[❌dir_idx] = sol[length(❌hom_idx)+1:length(sol)];
     
     u = y;
-    plotter = FerriteViz.MakiePlotter(dh, u)
-    
-    FerriteViz.solutionplot(plotter,field=:u)
-    
+    return grid, u
 end
 
-solve_ocp(grid)
+filenames = ["1em1.msh", "8em2.msh", "5em2.msh"]
+
+
+fine_mesh_name = "2em2.msh";
+
+fine_grid = togrid("meshes/" * fine_mesh_name)
+fine_grid, fine_u = solve_ocp(fine_grid)
+
+
+
+for filename in filenames
+    joined_filename  = "meshes/" * filename
+    grid = togrid(joined_filename)
+    print("clrd")
+    solve_ocp(grid)
+end
+
+
+
