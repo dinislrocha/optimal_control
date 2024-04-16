@@ -1,4 +1,4 @@
-using Ferrite, FerriteGmsh, FerriteViz, SparseArrays, WGLMakie
+using Ferrite, FerriteGmsh, FerriteViz, SparseArrays, WGLMakie, LinearAlgebra
 
 dim = 2
 
@@ -63,7 +63,6 @@ function doassemble_M!(M::SparseMatrixCSC, cellvalues::CellScalarValues{dim}, dh
     return M
 end
 
-
 function doassemble_∂M!(∂M::SparseMatrixCSC, cellvalues::CellScalarValues{dim}, facevalues::FaceScalarValues{dim}, dh::DofHandler) where {dim}
     n_basefuncs = getnbasefunctions(cellvalues)
     ∂Me = zeros(n_basefuncs, n_basefuncs)
@@ -73,7 +72,7 @@ function doassemble_∂M!(∂M::SparseMatrixCSC, cellvalues::CellScalarValues{di
 
         fill!(∂Me, 0)
         for face in 1:nfaces(cell)
-            if (cellid(cell), face) ∈ getfaceset(grid, "Control")
+            if (cellid(cell), face) ∈ getfaceset(dh.grid, "Control")
                 reinit!(facevalues, cell, face)
                 for q_point in 1:getnquadpoints(facevalues)
                     dΓ = getdetJdV(facevalues, q_point)
@@ -150,33 +149,55 @@ function solve_ocp(grid::Grid)
     z = zeros(ndofs(dh));
     z[❌dir_idx] = sol[length(❌hom_idx)+1:length(sol)];
     
-    u = y;
-    return dh, grid, u
+    return dh, grid, y
 end
 
-filenames = ["1em1.msh", "8em2.msh", "5em2.msh"]
+function get_rel_error(approx, exact, M)
+    diff = approx - exact;
+    return sqrt( (diff'*M*diff) / (exact'*M*exact) )
+end
+
+function lsq_fit(h, err)
+    x, y = log.(h), log.(err)
+    A = hcat( ones(length(x)), x')
+    par = qr(A) \ y
+    return par
+end
 
 
-fine_mesh_name = "2em2.msh";
+filenames = ["1em1.msh", "8em2.msh", "5em2.msh"];
+h_arr = [1e-1 8e-2  5e-2];
+fine_mesh_filename = "2em2.msh";
 
-grid_fine = togrid("meshes/" * fine_mesh_name)
-dh_fine, grid_fine, u_fine = solve_ocp(grid_fine)
+grid_fine = togrid("mixed_bc_dirichlet_control_1/meshes/" * fine_mesh_filename)
+dh_fine, grid_fine, u_fine  = solve_ocp(grid_fine)
 
+p_idx = reshape_to_nodes(dh_fine, collect(1:ndofs(dh_fine)), :u);
+p_idx = p_idx[:] |> invperm;
+
+#generate mass matrix for l2 norm computation
+M = create_sparsity_pattern(dh_fine);
+ip = Lagrange{dim, RefTetrahedron, 1}();
+qrule = QuadratureRule{dim, RefTetrahedron}(2);
+cellvalues = CellScalarValues(qrule, ip);
+doassemble_M!(M, cellvalues, dh_fine);
+
+# evaluation points for projection
 points = [node.x for node in grid_fine.nodes]
 
-grid_coarse = togrid("meshes/1em1.msh")
-dh_coarse, grid_coarse, u_coarse = solve_ocp(grid_coarse)
-
-
-points = [node.x for node in grid_fine.nodes]
+rel_err_arr = zeros(0);
 
 for filename in filenames
-    joined_filename  = "meshes/" * filename
-    grid = togrid(joined_filename)
-    print("clrd")
-    dh_coarse, grid_coarse, u_coarse = solve_ocp(grid)
+    joined_filename  = "mixed_bc_dirichlet_control_1/meshes/" * filename;
+    grid = togrid(joined_filename);
+    dh_coarse, grid_coarse, u_coarse = solve_ocp(grid);
     #project u_coarse onto fine grid
     ph = PointEvalHandler(grid_coarse, points);
-    Ferrite.get_point_values(ph, dh_coarse, u_coarse, :u)
-    #get_point_values(ph, dh_coarse, u_coarse, :u)
-end
+    u_coarse_proj = Ferrite.get_point_values(ph, dh_coarse, u_coarse, :u);
+    u_coarse_proj = u_coarse_proj[p_idx];
+    rel_err = get_rel_error(u_coarse_proj, u_fine, M)
+    append!(rel_err_arr, rel_err);
+end 
+
+# least squares fit
+lsq_fit(h_arr, rel_err_arr)
