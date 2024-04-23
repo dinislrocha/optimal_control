@@ -2,94 +2,7 @@ using Ferrite, FerriteGmsh, FerriteViz, SparseArrays, WGLMakie, LinearAlgebra
 
 dim = 2
 
-function doassemble_K!(K::SparseMatrixCSC, cellvalues::CellScalarValues{dim}, dh::DofHandler) where {dim}
-
-    n_basefuncs = getnbasefunctions(cellvalues)
-    Ke = zeros(n_basefuncs, n_basefuncs)
-
-    assembler = start_assemble(K)
-
-    for cell in CellIterator(dh)
-
-        fill!(Ke, 0)
-
-        reinit!(cellvalues, cell)
-
-        for q_point in 1:getnquadpoints(cellvalues)
-            dΩ = getdetJdV(cellvalues, q_point)
-
-            for i in 1:n_basefuncs
-                v = shape_value(cellvalues, q_point, i)
-                ∇v = shape_gradient(cellvalues, q_point, i)
-                for j in 1:n_basefuncs
-                    ∇u = shape_gradient(cellvalues, q_point, j)
-                    Ke[i, j] += (∇v ⋅ ∇u) * dΩ
-                end
-            end
-        end
-
-        assemble!(assembler, celldofs(cell), Ke)
-    end
-    return K
-end
-
-function doassemble_M!(M::SparseMatrixCSC, cellvalues::CellScalarValues{dim}, dh::DofHandler) where {dim}
-
-    n_basefuncs = getnbasefunctions(cellvalues)
-    Me = zeros(n_basefuncs, n_basefuncs)
-
-    assembler = start_assemble(M)
-
-    for cell in CellIterator(dh)
-
-        fill!(Me, 0)
-
-        reinit!(cellvalues, cell)
-
-        for q_point in 1:getnquadpoints(cellvalues)
-            dΩ = getdetJdV(cellvalues, q_point)
-
-            for i in 1:n_basefuncs
-                v = shape_value(cellvalues, q_point, i)
-                for j in 1:n_basefuncs
-                    u = shape_value(cellvalues,q_point, j)
-                    Me[i, j] += (v*u) * dΩ
-                end
-            end
-        end
-
-        assemble!(assembler, celldofs(cell), Me)
-    end
-    return M
-end
-
-function doassemble_∂M!(∂M::SparseMatrixCSC, cellvalues::CellScalarValues{dim}, facevalues::FaceScalarValues{dim}, dh::DofHandler) where {dim}
-    n_basefuncs = getnbasefunctions(cellvalues)
-    ∂Me = zeros(n_basefuncs, n_basefuncs)
-    assembler = start_assemble(∂M)
-
-    for cell in CellIterator(dh)
-
-        fill!(∂Me, 0)
-        for face in 1:nfaces(cell)
-            if (cellid(cell), face) ∈ getfaceset(dh.grid, "Control")
-                reinit!(facevalues, cell, face)
-                for q_point in 1:getnquadpoints(facevalues)
-                    dΓ = getdetJdV(facevalues, q_point)
-                    for i in 1:getnbasefunctions(facevalues)
-                        u = shape_value(facevalues, q_point, i)
-                        for j in 1:getnbasefunctions(facevalues)
-                            v = shape_value(facevalues, q_point, j)
-                            ∂Me[i,j] += u * v * dΓ
-                        end
-                    end
-                end
-            end
-        end
-        assemble!(assembler, celldofs(cell),  ∂Me)
-    end
-    return ∂M
-end
+include("assembling.jl")
 
 function compute_control_error(dh1 :: DofHandler, u1, dh2::DofHandler, u2)
     N = 1000
@@ -188,7 +101,7 @@ grid_fine = togrid("mixed_bc_dirichlet_control_1/meshes/" * fine_mesh_filename);
 
 #
 f_fun = x -> 1;
-yd_fun = x ->  (x[1] < 0.5) - 2.;
+yd_fun = x ->  1;
 
 dh_fine, grid_fine, u_fine  = solve_ocp(grid_fine, f_fun, yd_fun);
 
@@ -222,9 +135,8 @@ for filename in filenames
     global plotter = FerriteViz.MakiePlotter(dh_fine,u_coarse_proj-u_fine)
 end
 
-FerriteViz.solutionplot(plotter, field=:u)
+plotter = FerriteViz.MakiePlotter(dh_fine, u_fine)
+FerriteViz.surface(plotter, field=:u)
 
 # least squares fit
 lsq_fit(h_arr, rel_err_control_arr)
-
-compute_control_error(dh_fine, u_fine, dh_fine, u_fine)
