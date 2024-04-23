@@ -91,8 +91,18 @@ function doassemble_∂M!(∂M::SparseMatrixCSC, cellvalues::CellScalarValues{di
     return ∂M
 end
 
+function compute_control_error(dh1 :: DofHandler, u1, dh2::DofHandler, u2)
+    N = 1000
+    points_ΓC = [Tensor{1,2}([i/N 0]) for i in 0:N];
+    ph1 = PointEvalHandler(dh1.grid, points_ΓC);
+    ph2 = PointEvalHandler(dh2.grid, points_ΓC);
+    u1_eval = Ferrite.get_point_values(ph1, dh1, u1, :u);
+    u2_eval = Ferrite.get_point_values(ph2, dh2, u2, :u);
+    diff = u1_eval - u2_eval
+    return sqrt(( diff'diff)/(u2_eval'u2_eval))
+end
 
-function solve_ocp(grid::Grid)
+function solve_ocp(grid::Grid, f_fun::Function, yd_fun::Function)
 
     ip = Lagrange{dim, RefTetrahedron, 1}()
     qr = QuadratureRule{dim, RefTetrahedron}(2)
@@ -132,14 +142,17 @@ function solve_ocp(grid::Grid)
     dir_idx = cch.prescribed_dofs;
     ❌dir_idx = setdiff(1:ndofs(dh), dir_idx);
     
-    
-    f_data = ones(ndofs(dh));
-    
+
     fun_aux(a,b,c,d) = sparse_vcat(sparse_hcat(a, b), sparse_hcat(c,d));
     lhs_matrix = fun_aux(K[❌dir_idx,❌hom_idx], zeros(❌dir_idx |> length,❌dir_idx |> length), 
     (M+∂M)[❌hom_idx,❌hom_idx], K[❌hom_idx, ❌dir_idx]);
-    
-    rhs = vcat( (M*f_data)[❌dir_idx], zeros( ❌hom_idx |> length) );
+
+    f = zeros(ndofs(dh));
+    yd = zeros(ndofs(dh));
+    f = apply_analytical!(f, dh, :u, f_fun);
+    yd = apply_analytical!(yd, dh, :u, yd_fun);
+
+    rhs = vcat( (M*f)[❌dir_idx], (M*yd)[❌hom_idx] );
     
     sol = lhs_matrix \ rhs
     
@@ -165,12 +178,19 @@ function lsq_fit(h, err)
 end
 
 
+α = 0.1;
+
 filenames = ["1em1.msh", "8em2.msh", "5em2.msh"];
 h_arr = [1e-1 8e-2  5e-2];
 fine_mesh_filename = "2em2.msh";
 
-grid_fine = togrid("mixed_bc_dirichlet_control_1/meshes/" * fine_mesh_filename)
-dh_fine, grid_fine, u_fine  = solve_ocp(grid_fine)
+grid_fine = togrid("mixed_bc_dirichlet_control_1/meshes/" * fine_mesh_filename);
+
+#
+f_fun = x -> 1;
+yd_fun = x ->  (x[1] < 0.5) - 2.;
+
+dh_fine, grid_fine, u_fine  = solve_ocp(grid_fine, f_fun, yd_fun);
 
 p_idx = reshape_to_nodes(dh_fine, collect(1:ndofs(dh_fine)), :u);
 p_idx = p_idx[:] |> invperm;
@@ -184,20 +204,27 @@ doassemble_M!(M, cellvalues, dh_fine);
 
 # evaluation points for projection
 points = [node.x for node in grid_fine.nodes]
-
 rel_err_arr = zeros(0);
+rel_err_control_arr = zeros(0);
 
 for filename in filenames
     joined_filename  = "mixed_bc_dirichlet_control_1/meshes/" * filename;
     grid = togrid(joined_filename);
-    dh_coarse, grid_coarse, u_coarse = solve_ocp(grid);
+    dh_coarse, grid_coarse, u_coarse = solve_ocp(grid, f_fun, yd_fun);
     #project u_coarse onto fine grid
     ph = PointEvalHandler(grid_coarse, points);
     u_coarse_proj = Ferrite.get_point_values(ph, dh_coarse, u_coarse, :u);
     u_coarse_proj = u_coarse_proj[p_idx];
     rel_err = get_rel_error(u_coarse_proj, u_fine, M)
+    rel_err_control = compute_control_error(dh_coarse, u_coarse, dh_fine, u_fine);
     append!(rel_err_arr, rel_err);
-end 
+    append!(rel_err_control_arr, rel_err_control)
+    global plotter = FerriteViz.MakiePlotter(dh_fine,u_coarse_proj-u_fine)
+end
+
+FerriteViz.solutionplot(plotter, field=:u)
 
 # least squares fit
-lsq_fit(h_arr, rel_err_arr)
+lsq_fit(h_arr, rel_err_control_arr)
+
+compute_control_error(dh_fine, u_fine, dh_fine, u_fine)
